@@ -1,7 +1,26 @@
 import json
+import os
 from urllib.parse import quote
 
 import httpx
+from dotenv import load_dotenv
+from google import genai
+
+# Load environment variables
+load_dotenv()
+
+# Gemini configuration
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.5-flash")
+
+# Initialize Gemini only if API key exists
+gemini_client = None
+if GEMINI_API_KEY:
+    try:
+        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
+    except Exception:
+        gemini_client = None
+
 
 LANGUAGE_NAMES = {
     "auto": "Auto-Detect",
@@ -25,38 +44,68 @@ def normalize_lang(code: str) -> str:
     return code.split("-")[0]
 
 
-async def translate_text(
+async def gemini_translate(
     text: str,
     target_lang: str,
     source_lang: str = "auto"
-) -> dict:
-    source_name = LANGUAGE_NAMES.get(source_lang, source_lang)
+):
+    """
+    High-quality translation using Gemini.
+    Raises exception if quota is exceeded or API fails.
+    """
+    if gemini_client is None:
+        raise Exception("Gemini API key not configured")
+
     target_name = LANGUAGE_NAMES.get(target_lang, target_lang)
 
-    # Preserved structure
     if source_lang == "auto":
-        lang_instruction = (
-            f"Detect the language of the input text and translate it to {target_name}."
+        instruction = (
+            f"Detect the source language automatically and translate the text into {target_name}. "
+            "If the input is Romanized Hindi/Urdu (written in English letters), "
+            "understand the meaning and translate naturally."
         )
     else:
-        lang_instruction = (
-            f"Translate from {source_name} to {target_name}."
+        source_name = LANGUAGE_NAMES.get(source_lang, source_lang)
+        instruction = (
+            f"Translate from {source_name} to {target_name}. "
+            "If the input is Romanized Hindi/Urdu (written in English letters), "
+            "understand the meaning and translate naturally."
         )
 
-    prompt = f"""{lang_instruction}
+    prompt = f"""
+{instruction}
 
 Rules:
-- Preserve the original tone, style, and formatting exactly
-- Handle idioms, slang, and cultural expressions naturally
-- Keep proper nouns, brand names, and technical terms appropriately
-- If the text is already in the target language, return it as-is
-- Return ONLY the translated text, nothing else
+- Preserve the exact meaning.
+- Handle Romanized Hindi/Urdu/Hinglish naturally.
+- Translate idioms and slang appropriately.
+- Keep formatting intact.
+- Return ONLY the translated text.
+- Do not include quotes or explanations.
 
-Text to translate:
-{text}"""
+Text:
+{text}
+"""
 
-    # Auto-detect source language if needed
+    response = gemini_client.models.generate_content(
+        model=MODEL_NAME,
+        contents=prompt
+    )
+
+    return response.text.strip()
+
+
+async def mymemory_translate(
+    text: str,
+    target_lang: str,
+    source_lang: str = "auto"
+):
+    """
+    Free fallback translation using MyMemory.
+    No API key required.
+    """
     detected_lang = source_lang
+
     if source_lang == "auto":
         detection = await detect_language(text)
         detected_lang = detection["code"]
@@ -85,6 +134,40 @@ Text to translate:
     if not translated:
         translated = text
 
+    return translated
+
+
+async def translate_text(
+    text: str,
+    target_lang: str,
+    source_lang: str = "auto"
+) -> dict:
+    """
+    Main translation function:
+    1. Try Gemini first.
+    2. If Gemini fails or quota is exceeded, fallback to MyMemory.
+    """
+    detected_lang = source_lang
+
+    if source_lang == "auto":
+        detection = await detect_language(text)
+        detected_lang = detection["code"]
+
+    # Try Gemini first
+    try:
+        translated = await gemini_translate(
+            text=text,
+            target_lang=target_lang,
+            source_lang=source_lang
+        )
+    except Exception:
+        # Automatic fallback to free API
+        translated = await mymemory_translate(
+            text=text,
+            target_lang=target_lang,
+            source_lang=detected_lang
+        )
+
     return {
         "translated_text": translated,
         "detected_language": detected_lang,
@@ -99,7 +182,36 @@ Text to translate:
 
 
 async def detect_language(text: str) -> dict:
-    # Lightweight heuristic for common languages
+    """
+    Detect language using Gemini if available,
+    otherwise use simple heuristics.
+    """
+    if gemini_client is not None:
+        try:
+            prompt = f"""
+Detect the language of the following text.
+
+Important:
+- If the text is Romanized Hindi/Urdu/Hinglish written in English letters,
+  return "hi".
+
+Reply ONLY with valid JSON:
+{{"code":"hi","name":"Hindi","confidence":95}}
+
+Text:
+{text[:300]}
+"""
+
+            response = gemini_client.models.generate_content(
+                model=MODEL_NAME,
+                contents=prompt
+            )
+
+            return json.loads(response.text.strip())
+        except Exception:
+            pass
+
+    # Fallback heuristics
     sample = text[:300]
 
     if any("\u0600" <= ch <= "\u06FF" for ch in sample):
@@ -113,20 +225,11 @@ async def detect_language(text: str) -> dict:
     elif any("\u4E00" <= ch <= "\u9FFF" for ch in sample):
         code = "zh"
     else:
-        code = "en"
+        # Treat Romanized Hindi/Hinglish as Hindi by default
+        code = "hi"
 
-    result = {
+    return {
         "code": code,
         "name": LANGUAGE_NAMES.get(code, code),
         "confidence": 90
     }
-
-    # Preserved JSON parsing concept
-    try:
-        return json.loads(json.dumps(result))
-    except Exception:
-        return {
-            "code": "en",
-            "name": "English",
-            "confidence": 50
-        }
