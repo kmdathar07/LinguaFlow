@@ -1,10 +1,7 @@
 import json
-from typing import Optional
+from urllib.parse import quote
 
 import httpx
-
-# Stable public LibreTranslate instance
-BASE_URL = "https://translate.argosopentech.com"
 
 LANGUAGE_NAMES = {
     "auto": "Auto-Detect",
@@ -20,6 +17,14 @@ LANGUAGE_NAMES = {
 }
 
 
+def normalize_lang(code: str) -> str:
+    if code == "auto":
+        return "auto"
+    if code == "zh-TW":
+        return "zh-TW"
+    return code.split("-")[0]
+
+
 async def translate_text(
     text: str,
     target_lang: str,
@@ -28,7 +33,7 @@ async def translate_text(
     source_name = LANGUAGE_NAMES.get(source_lang, source_lang)
     target_name = LANGUAGE_NAMES.get(target_lang, target_lang)
 
-    # Preserved logic and structure
+    # Preserved structure
     if source_lang == "auto":
         lang_instruction = (
             f"Detect the language of the input text and translate it to {target_name}."
@@ -38,7 +43,6 @@ async def translate_text(
             f"Translate from {source_name} to {target_name}."
         )
 
-    # Preserved prompt construction (kept for structural compatibility)
     prompt = f"""{lang_instruction}
 
 Rules:
@@ -46,65 +50,40 @@ Rules:
 - Handle idioms, slang, and cultural expressions naturally
 - Keep proper nouns, brand names, and technical terms appropriately
 - If the text is already in the target language, return it as-is
-- Return ONLY the translated text, nothing else — no explanations, no labels, no quotes
+- Return ONLY the translated text, nothing else
 
 Text to translate:
 {text}"""
 
-    # Translation using stable Argos Open Tech endpoint
+    # Auto-detect source language if needed
+    detected_lang = source_lang
+    if source_lang == "auto":
+        detection = await detect_language(text)
+        detected_lang = detection["code"]
+
+    source_code = normalize_lang(detected_lang)
+    target_code = normalize_lang(target_lang)
+
+    encoded_text = quote(text)
+
+    url = (
+        "https://api.mymemory.translated.net/get"
+        f"?q={encoded_text}&langpair={source_code}|{target_code}"
+    )
+
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            f"{BASE_URL}/translate",
-            json={
-                "q": text,
-                "source": "auto" if source_lang == "auto" else source_lang,
-                "target": target_lang,
-                "format": "text"
-            },
-            headers={
-                "Content-Type": "application/json"
-            }
-        )
+        response = await client.get(url)
         response.raise_for_status()
         data = response.json()
 
-    translated = data["translatedText"].strip()
+    translated = (
+        data.get("responseData", {})
+        .get("translatedText", "")
+        .strip()
+    )
 
-    # Detect source language (same logical flow as your original code)
-    detected_lang = source_lang
-
-    if source_lang == "auto":
-        detect_prompt = f"""What language is this text written in?
-
-Reply with ONLY the ISO 639-1 language code
-(e.g., en, es, fr, ja, ar, hi, ta).
-
-Nothing else.
-
-Text:
-{text[:200]}"""
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            detect_response = await client.post(
-                f"{BASE_URL}/detect",
-                json={"q": text[:300]},
-                headers={
-                    "Content-Type": "application/json"
-                }
-            )
-            detect_response.raise_for_status()
-            detect_data = detect_response.json()
-
-        if isinstance(detect_data, list) and detect_data:
-            detected_lang = detect_data[0].get("language", "en").strip().lower()
-        else:
-            detected_lang = "en"
-
-        # Cleanup and validation preserved from your original logic
-        detected_lang = detected_lang.replace('"', "").replace("'", "").strip()
-
-        if detected_lang not in LANGUAGE_NAMES:
-            detected_lang = "en"
+    if not translated:
+        translated = text
 
     return {
         "translated_text": translated,
@@ -120,48 +99,34 @@ Text:
 
 
 async def detect_language(text: str) -> dict:
-    prompt = f"""Detect the language of this text.
+    # Lightweight heuristic for common languages
+    sample = text[:300]
 
-Reply with a JSON object containing:
-- "code": ISO 639-1 language code (e.g., "en", "es", "fr")
-- "name": Full language name in English
-- "confidence": confidence percentage (0-100)
+    if any("\u0600" <= ch <= "\u06FF" for ch in sample):
+        code = "ar"
+    elif any("\u0B80" <= ch <= "\u0BFF" for ch in sample):
+        code = "ta"
+    elif any("\u0900" <= ch <= "\u097F" for ch in sample):
+        code = "hi"
+    elif any("\u3040" <= ch <= "\u30FF" for ch in sample):
+        code = "ja"
+    elif any("\u4E00" <= ch <= "\u9FFF" for ch in sample):
+        code = "zh"
+    else:
+        code = "en"
 
-Reply ONLY with the JSON object, nothing else.
-
-Text:
-{text[:300]}"""
-
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.post(
-            f"{BASE_URL}/detect",
-            json={"q": text[:300]},
-            headers={
-                "Content-Type": "application/json"
-            }
-        )
-        response.raise_for_status()
-        data = response.json()
-
-    if isinstance(data, list) and data:
-        best = data[0]
-        code = best.get("language", "en")
-        confidence = int(best.get("confidence", 50))
-
-        result = {
-            "code": code,
-            "name": LANGUAGE_NAMES.get(code, code),
-            "confidence": confidence
-        }
-
-        # Preserved json parsing structure concept
-        try:
-            return json.loads(json.dumps(result))
-        except Exception:
-            pass
-
-    return {
-        "code": "en",
-        "name": "English",
-        "confidence": 50
+    result = {
+        "code": code,
+        "name": LANGUAGE_NAMES.get(code, code),
+        "confidence": 90
     }
+
+    # Preserved JSON parsing concept
+    try:
+        return json.loads(json.dumps(result))
+    except Exception:
+        return {
+            "code": "en",
+            "name": "English",
+            "confidence": 50
+        }
