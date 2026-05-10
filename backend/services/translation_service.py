@@ -3,6 +3,9 @@ from typing import Optional
 
 import httpx
 
+# Stable public LibreTranslate instance
+BASE_URL = "https://translate.argosopentech.com"
+
 LANGUAGE_NAMES = {
     "auto": "Auto-Detect",
     "en": "English", "es": "Spanish", "fr": "French", "de": "German",
@@ -48,15 +51,18 @@ Rules:
 Text to translate:
 {text}"""
 
-    # Translation using LibreTranslate
+    # Translation using stable Argos Open Tech endpoint
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
-            "https://libretranslate.com/translate",
+            f"{BASE_URL}/translate",
             json={
                 "q": text,
                 "source": "auto" if source_lang == "auto" else source_lang,
                 "target": target_lang,
                 "format": "text"
+            },
+            headers={
+                "Content-Type": "application/json"
             }
         )
         response.raise_for_status()
@@ -80,8 +86,11 @@ Text:
 
         async with httpx.AsyncClient(timeout=30) as client:
             detect_response = await client.post(
-                "https://libretranslate.com/detect",
-                json={"q": text[:300]}
+                f"{BASE_URL}/detect",
+                json={"q": text[:300]},
+                headers={
+                    "Content-Type": "application/json"
+                }
             )
             detect_response.raise_for_status()
             detect_data = detect_response.json()
@@ -125,8 +134,11 @@ Text:
 
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post(
-            "https://libretranslate.com/detect",
-            json={"q": text[:300]}
+            f"{BASE_URL}/detect",
+            json={"q": text[:300]},
+            headers={
+                "Content-Type": "application/json"
+            }
         )
         response.raise_for_status()
         data = response.json()
