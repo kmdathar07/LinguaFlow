@@ -131,7 +131,7 @@ export default function App() {
           borderTop: '1px solid var(--border)',
           fontSize: 13, color: 'var(--text3)',
         }}>
-          Built with ❤️ using Claude AI · LinguaFlow v1.0
+          Built with ❤️ using Google Gemini AI · LinguaFlow v1.0
         </footer>
       </div>
 
