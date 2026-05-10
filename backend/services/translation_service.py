@@ -1,6 +1,7 @@
-import json
 import os
-from urllib.parse import quote
+import json
+import urllib.parse
+from typing import Optional
 
 import httpx
 from dotenv import load_dotenv
@@ -9,18 +10,13 @@ from google import genai
 # Load environment variables
 load_dotenv()
 
-# Gemini configuration
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.5-flash")
+# Initialize Gemini client
+client = genai.Client(
+    api_key=os.getenv("GEMINI_API_KEY", "")
+)
 
-# Initialize Gemini only if API key exists
-gemini_client = None
-if GEMINI_API_KEY:
-    try:
-        gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-    except Exception:
-        gemini_client = None
-
+# Default model (can be overridden in .env)
+MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.5-flash-lite")
 
 LANGUAGE_NAMES = {
     "auto": "Auto-Detect",
@@ -36,92 +32,86 @@ LANGUAGE_NAMES = {
 }
 
 
-def normalize_lang(code: str) -> str:
-    if code == "auto":
-        return "auto"
-    if code == "zh-TW":
-        return "zh-TW"
-    return code.split("-")[0]
-
-
-async def gemini_translate(
+# ---------------------------------------------------------
+# Gemini Translation (Primary)
+# ---------------------------------------------------------
+async def _translate_with_gemini(
     text: str,
-    target_lang: str,
-    source_lang: str = "auto"
-):
-    """
-    High-quality translation using Gemini.
-    Raises exception if quota is exceeded or API fails.
-    """
-    if gemini_client is None:
-        raise Exception("Gemini API key not configured")
-
+    source_lang: str,
+    target_lang: str
+) -> str:
+    source_name = LANGUAGE_NAMES.get(source_lang, source_lang)
     target_name = LANGUAGE_NAMES.get(target_lang, target_lang)
 
     if source_lang == "auto":
-        instruction = (
-            f"Detect the source language automatically and translate the text into {target_name}. "
-            "If the input is Romanized Hindi/Urdu (written in English letters), "
-            "understand the meaning and translate naturally."
+        lang_instruction = (
+            f"Detect the language of the input text and translate it to {target_name}."
         )
     else:
-        source_name = LANGUAGE_NAMES.get(source_lang, source_lang)
-        instruction = (
-            f"Translate from {source_name} to {target_name}. "
-            "If the input is Romanized Hindi/Urdu (written in English letters), "
-            "understand the meaning and translate naturally."
+        lang_instruction = (
+            f"Translate from {source_name} to {target_name}."
         )
 
-    prompt = f"""
-{instruction}
+    prompt = f"""{lang_instruction}
+
+Translate naturally like Google Translate.
 
 Rules:
 - Preserve the exact meaning.
-- Handle Romanized Hindi/Urdu/Hinglish naturally.
-- Translate idioms and slang appropriately.
-- Keep formatting intact.
+- Use fluent, natural {target_name}.
+- Handle Hinglish, Tanglish, Roman Urdu, and transliterated text correctly.
+- Understand context, not word-by-word translation.
 - Return ONLY the translated text.
-- Do not include quotes or explanations.
+- No explanations.
+- No quotes.
+- No labels.
 
-Text:
+Examples:
+main ghar ja raha hun -> I am going home.
+mujhe nahi khaana -> I don't want to eat.
+naan veliya poren -> I am going outside.
+
+Text to translate:
 {text}
 """
 
-    response = gemini_client.models.generate_content(
+    response = client.models.generate_content(
         model=MODEL_NAME,
         contents=prompt
     )
 
+    if not response.text:
+        raise Exception("Gemini returned an empty response.")
+
     return response.text.strip()
 
 
-async def mymemory_translate(
+# ---------------------------------------------------------
+# MyMemory Translation (Fallback)
+# ---------------------------------------------------------
+async def _translate_with_mymemory(
     text: str,
-    target_lang: str,
-    source_lang: str = "auto"
-):
-    """
-    Free fallback translation using MyMemory.
-    No API key required.
-    """
-    detected_lang = source_lang
+    source_lang: str,
+    target_lang: str
+) -> str:
+    source = "auto" if source_lang == "auto" else source_lang
 
-    if source_lang == "auto":
-        detection = await detect_language(text)
-        detected_lang = detection["code"]
+    # MyMemory requires a specific source language.
+    # If source is auto, use English as a safe default and let
+    # detected language logic below correct future calls.
+    if source == "auto":
+        source = "en"
 
-    source_code = normalize_lang(detected_lang)
-    target_code = normalize_lang(target_lang)
-
-    encoded_text = quote(text)
+    langpair = f"{source}|{target_lang}"
 
     url = (
         "https://api.mymemory.translated.net/get"
-        f"?q={encoded_text}&langpair={source_code}|{target_code}"
+        f"?q={urllib.parse.quote(text)}"
+        f"&langpair={urllib.parse.quote(langpair)}"
     )
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.get(url)
+    async with httpx.AsyncClient(timeout=30) as http:
+        response = await http.get(url)
         response.raise_for_status()
         data = response.json()
 
@@ -132,41 +122,83 @@ async def mymemory_translate(
     )
 
     if not translated:
-        translated = text
+        raise Exception("MyMemory returned an empty response.")
 
     return translated
 
 
+# ---------------------------------------------------------
+# Language Detection (Gemini)
+# ---------------------------------------------------------
+async def _detect_language_with_gemini(text: str) -> str:
+    prompt = f"""What language is this text written in?
+
+Reply with ONLY the ISO 639-1 language code.
+Examples: en, hi, ta, ar, fr
+
+Text:
+{text[:200]}
+"""
+
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=prompt
+    )
+
+    if not response.text:
+        return "en"
+
+    detected = response.text.strip().lower()
+    detected = detected.replace('"', "").replace("'", "").strip()
+
+    if detected not in LANGUAGE_NAMES:
+        return "en"
+
+    return detected
+
+
+# ---------------------------------------------------------
+# Public Translation Function
+# ---------------------------------------------------------
 async def translate_text(
     text: str,
     target_lang: str,
     source_lang: str = "auto"
 ) -> dict:
-    """
-    Main translation function:
-    1. Try Gemini first.
-    2. If Gemini fails or quota is exceeded, fallback to MyMemory.
-    """
+    # Detect source language first if auto
     detected_lang = source_lang
 
     if source_lang == "auto":
-        detection = await detect_language(text)
-        detected_lang = detection["code"]
+        try:
+            detected_lang = await _detect_language_with_gemini(text)
+        except Exception:
+            detected_lang = "en"
 
-    # Try Gemini first
+    # ---------------- Primary: Gemini ----------------
     try:
-        translated = await gemini_translate(
+        translated = await _translate_with_gemini(
             text=text,
-            target_lang=target_lang,
-            source_lang=source_lang
+            source_lang=source_lang,
+            target_lang=target_lang
         )
-    except Exception:
-        # Automatic fallback to free API
-        translated = await mymemory_translate(
-            text=text,
-            target_lang=target_lang,
-            source_lang=detected_lang
-        )
+        translation_engine = "gemini"
+
+    # ---------------- Fallback: MyMemory ----------------
+    except Exception as gemini_error:
+        try:
+            translated = await _translate_with_mymemory(
+                text=text,
+                source_lang=detected_lang,
+                target_lang=target_lang
+            )
+            translation_engine = "mymemory"
+        except Exception:
+            # If both fail, show Gemini error so user knows to retry later
+            raise Exception(
+                f"Gemini is temporarily unavailable or quota exceeded. "
+                f"Please try again after some time.\n\n"
+                f"Original error: {str(gemini_error)}"
+            )
 
     return {
         "translated_text": translated,
@@ -178,58 +210,24 @@ async def translate_text(
         "source_lang": source_lang,
         "target_lang": target_lang,
         "character_count": len(text),
+        "translation_engine": translation_engine
     }
 
 
+# ---------------------------------------------------------
+# Public Language Detection Function
+# ---------------------------------------------------------
 async def detect_language(text: str) -> dict:
-    """
-    Detect language using Gemini if available,
-    otherwise use simple heuristics.
-    """
-    if gemini_client is not None:
-        try:
-            prompt = f"""
-Detect the language of the following text.
-
-Important:
-- If the text is Romanized Hindi/Urdu/Hinglish written in English letters,
-  return "hi".
-
-Reply ONLY with valid JSON:
-{{"code":"hi","name":"Hindi","confidence":95}}
-
-Text:
-{text[:300]}
-"""
-
-            response = gemini_client.models.generate_content(
-                model=MODEL_NAME,
-                contents=prompt
-            )
-
-            return json.loads(response.text.strip())
-        except Exception:
-            pass
-
-    # Fallback heuristics
-    sample = text[:300]
-
-    if any("\u0600" <= ch <= "\u06FF" for ch in sample):
-        code = "ar"
-    elif any("\u0B80" <= ch <= "\u0BFF" for ch in sample):
-        code = "ta"
-    elif any("\u0900" <= ch <= "\u097F" for ch in sample):
-        code = "hi"
-    elif any("\u3040" <= ch <= "\u30FF" for ch in sample):
-        code = "ja"
-    elif any("\u4E00" <= ch <= "\u9FFF" for ch in sample):
-        code = "zh"
-    else:
-        # Treat Romanized Hindi/Hinglish as Hindi by default
-        code = "hi"
-
-    return {
-        "code": code,
-        "name": LANGUAGE_NAMES.get(code, code),
-        "confidence": 90
-    }
+    try:
+        code = await _detect_language_with_gemini(text)
+        return {
+            "code": code,
+            "name": LANGUAGE_NAMES.get(code, code),
+            "confidence": 98
+        }
+    except Exception:
+        return {
+            "code": "en",
+            "name": "English",
+            "confidence": 50
+        }
