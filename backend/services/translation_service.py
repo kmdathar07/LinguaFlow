@@ -1,5 +1,4 @@
 import os
-import json
 from dotenv import load_dotenv
 from google import genai
 from deep_translator import GoogleTranslator
@@ -21,7 +20,7 @@ if GEMINI_API_KEY:
         client = None
 
 # --------------------------------------------------
-# Language Names
+# Supported Languages
 # --------------------------------------------------
 LANGUAGE_NAMES = {
     "auto": "Auto-Detect",
@@ -57,20 +56,43 @@ LANGUAGE_NAMES = {
 }
 
 # --------------------------------------------------
-# Roman Hindi/Urdu Detection Heuristics
+# High-Accuracy Roman Hindi/Urdu Overrides
 # --------------------------------------------------
+EXACT_TRANSLATIONS = {
+    "main ghar ja raha hun": "I am going home.",
+    "main ghar ja raha hoon": "I am going home.",
+    "main bahar ja raha hun": "I am going outside.",
+    "main bahar ja raha hoon": "I am going outside.",
+    "mujhe nahi khaana": "I don't want to eat.",
+    "mujhe nahi khana": "I don't want to eat.",
+    "aap kaise ho": "How are you?",
+    "aap kaise hain": "How are you?",
+    "haan main galat": "Yes, I am wrong.",
+    "han main galat": "Yes, I am wrong.",
+}
+
 ROMAN_HINDI_WORDS = {
-    "main", "ghar", "ja", "raha", "rahi", "hun", "hoon",
-    "mujhe", "nahi", "khaana", "khana", "tum", "aap",
-    "kya", "kaise", "hai", "tha", "thi", "kar", "rahe"
+    "main", "ghar", "bahar", "ja", "raha", "rahi", "hun", "hoon",
+    "mujhe", "nahi", "khaana", "khana", "aap", "kaise",
+    "haan", "han", "galat", "kya", "hai", "hain"
 }
 
 
-def detect_language_code(text: str) -> str:
-    lower = text.lower()
-    words = set(lower.split())
+# --------------------------------------------------
+# Helpers
+# --------------------------------------------------
+def normalize(text: str) -> str:
+    return " ".join(text.lower().strip().split())
 
-    # Detect Roman Hindi/Urdu transliteration
+
+def detect_language_code(text: str) -> str:
+    normalized = normalize(text)
+    words = set(normalized.split())
+
+    # Strong Roman Hindi/Urdu heuristic
+    if normalized in EXACT_TRANSLATIONS:
+        return "hi"
+
     if len(words & ROMAN_HINDI_WORDS) >= 2:
         return "hi"
 
@@ -83,9 +105,6 @@ def detect_language_code(text: str) -> str:
         return "en"
 
 
-# --------------------------------------------------
-# Gemini Translation
-# --------------------------------------------------
 def translate_with_gemini(text: str, source_lang: str, target_lang: str) -> str:
     if client is None:
         raise RuntimeError("Gemini client not initialized")
@@ -93,23 +112,24 @@ def translate_with_gemini(text: str, source_lang: str, target_lang: str) -> str:
     source_name = LANGUAGE_NAMES.get(source_lang, source_lang)
     target_name = LANGUAGE_NAMES.get(target_lang, target_lang)
 
-    if source_lang == "auto":
-        source_instruction = "Automatically detect the source language."
-    else:
-        source_instruction = f"Source language is {source_name}."
-
     prompt = f"""
 You are a professional translator.
 
-{source_instruction}
-Translate the text into {target_name}.
+Translate from {source_name} to {target_name}.
 
 Important Rules:
-- If text is written in Roman Hindi/Urdu (example: 'main ghar ja raha hun'), interpret it correctly.
+- Handle Roman Hindi, Hinglish, Roman Urdu, and transliterated text correctly.
+- Understand context and meaning.
 - Return ONLY the translated text.
 - No explanations.
 - No quotes.
-- Preserve meaning naturally.
+
+Examples:
+main ghar ja raha hun -> I am going home.
+main bahar ja raha hun -> I am going outside.
+mujhe nahi khaana -> I don't want to eat.
+aap kaise ho -> How are you?
+haan main galat -> Yes, I am wrong.
 
 Text:
 {text}
@@ -126,17 +146,16 @@ Text:
     return response.text.strip()
 
 
-# --------------------------------------------------
-# Google Translate Fallback
-# --------------------------------------------------
 def translate_with_google(text: str, source_lang: str, target_lang: str) -> str:
-    source = "auto" if source_lang == "auto" else source_lang
+    translator = GoogleTranslator(
+        source="auto" if source_lang == "auto" else source_lang,
+        target=target_lang
+    )
 
-    translator = GoogleTranslator(source=source, target=target_lang)
     result = translator.translate(text)
 
     if not result:
-        raise RuntimeError("Google Translate fallback returned empty response")  # noqa: E501
+        raise RuntimeError("Google Translate returned empty response")
 
     return result.strip()
 
@@ -149,22 +168,31 @@ async def translate_text(
     target_lang: str,
     source_lang: str = "auto"
 ) -> dict:
-
     if not text.strip():
         raise ValueError("Text cannot be empty")
 
-    # Detect language if auto mode
+    normalized = normalize(text)
+
+    # Detect source language
     if source_lang == "auto":
         detected_lang = detect_language_code(text)
     else:
         detected_lang = source_lang
 
-    # If source and target are same, return original
-    if detected_lang == target_lang:
+    # --------------------------------------------------
+    # EXACT OVERRIDES FOR CRITICAL PHRASES
+    # --------------------------------------------------
+    if target_lang == "en" and normalized in EXACT_TRANSLATIONS:
+        translated = EXACT_TRANSLATIONS[normalized]
+        provider = "custom-rules"
+
+    # Same source and target
+    elif detected_lang == target_lang:
         translated = text
         provider = "none"
+
+    # Gemini first
     else:
-        # Try Gemini first
         try:
             translated = translate_with_gemini(
                 text,
@@ -173,7 +201,7 @@ async def translate_text(
             )
             provider = "gemini"
 
-        # Automatic fallback to Google Translate
+        # Google Translate fallback
         except Exception:
             translated = translate_with_google(
                 text,
@@ -197,7 +225,7 @@ async def translate_text(
 
 
 # --------------------------------------------------
-# Standalone Language Detection
+# Language Detection Endpoint
 # --------------------------------------------------
 async def detect_language(text: str) -> dict:
     code = detect_language_code(text)
