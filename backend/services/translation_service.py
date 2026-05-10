@@ -1,11 +1,10 @@
 import os
 import json
-import urllib.parse
-from typing import Optional
+import asyncio
 
-import httpx
 from dotenv import load_dotenv
 from google import genai
+from deep_translator import GoogleTranslator
 
 # Load environment variables
 load_dotenv()
@@ -15,7 +14,7 @@ client = genai.Client(
     api_key=os.getenv("GEMINI_API_KEY", "")
 )
 
-# Default model (can be overridden in .env)
+# Default model
 MODEL_NAME = os.getenv("MODEL_NAME", "gemini-2.5-flash-lite")
 
 LANGUAGE_NAMES = {
@@ -32,104 +31,6 @@ LANGUAGE_NAMES = {
 }
 
 
-# ---------------------------------------------------------
-# Gemini Translation (Primary)
-# ---------------------------------------------------------
-async def _translate_with_gemini(
-    text: str,
-    source_lang: str,
-    target_lang: str
-) -> str:
-    source_name = LANGUAGE_NAMES.get(source_lang, source_lang)
-    target_name = LANGUAGE_NAMES.get(target_lang, target_lang)
-
-    if source_lang == "auto":
-        lang_instruction = (
-            f"Detect the language of the input text and translate it to {target_name}."
-        )
-    else:
-        lang_instruction = (
-            f"Translate from {source_name} to {target_name}."
-        )
-
-    prompt = f"""{lang_instruction}
-
-Translate naturally like Google Translate.
-
-Rules:
-- Preserve the exact meaning.
-- Use fluent, natural {target_name}.
-- Handle Hinglish, Tanglish, Roman Urdu, and transliterated text correctly.
-- Understand context, not word-by-word translation.
-- Return ONLY the translated text.
-- No explanations.
-- No quotes.
-- No labels.
-
-Examples:
-main ghar ja raha hun -> I am going home.
-mujhe nahi khaana -> I don't want to eat.
-naan veliya poren -> I am going outside.
-
-Text to translate:
-{text}
-"""
-
-    response = client.models.generate_content(
-        model=MODEL_NAME,
-        contents=prompt
-    )
-
-    if not response.text:
-        raise Exception("Gemini returned an empty response.")
-
-    return response.text.strip()
-
-
-# ---------------------------------------------------------
-# MyMemory Translation (Fallback)
-# ---------------------------------------------------------
-async def _translate_with_mymemory(
-    text: str,
-    source_lang: str,
-    target_lang: str
-) -> str:
-    source = "auto" if source_lang == "auto" else source_lang
-
-    # MyMemory requires a specific source language.
-    # If source is auto, use English as a safe default and let
-    # detected language logic below correct future calls.
-    if source == "auto":
-        source = "en"
-
-    langpair = f"{source}|{target_lang}"
-
-    url = (
-        "https://api.mymemory.translated.net/get"
-        f"?q={urllib.parse.quote(text)}"
-        f"&langpair={urllib.parse.quote(langpair)}"
-    )
-
-    async with httpx.AsyncClient(timeout=30) as http:
-        response = await http.get(url)
-        response.raise_for_status()
-        data = response.json()
-
-    translated = (
-        data.get("responseData", {})
-        .get("translatedText", "")
-        .strip()
-    )
-
-    if not translated:
-        raise Exception("MyMemory returned an empty response.")
-
-    return translated
-
-
-# ---------------------------------------------------------
-# Language Detection (Gemini)
-# ---------------------------------------------------------
 async def _detect_language_with_gemini(text: str) -> str:
     prompt = f"""What language is this text written in?
 
@@ -148,64 +49,134 @@ Text:
     if not response.text:
         return "en"
 
-    detected = response.text.strip().lower()
-    detected = detected.replace('"', "").replace("'", "").strip()
+    code = response.text.strip().lower()
+    code = code.replace('"', "").replace("'", "").strip()
 
-    if detected not in LANGUAGE_NAMES:
+    if code not in LANGUAGE_NAMES:
         return "en"
 
-    return detected
+    return code
 
 
-# ---------------------------------------------------------
-# Public Translation Function
-# ---------------------------------------------------------
+async def _translate_with_gemini(
+    text: str,
+    source_lang: str,
+    target_lang: str
+) -> str:
+    source_name = LANGUAGE_NAMES.get(source_lang, source_lang)
+    target_name = LANGUAGE_NAMES.get(target_lang, target_lang)
+
+    prompt = f"""Translate from {source_name} to {target_name}.
+
+Translate naturally like Google Translate.
+
+Rules:
+- Preserve the exact meaning.
+- Use fluent and natural {target_name}.
+- Handle Hinglish, Tanglish, Roman Urdu, and transliterated text correctly.
+- Understand context, not word-by-word translation.
+- Return ONLY the translated text.
+- No explanations.
+- No quotes.
+- No labels.
+
+Examples:
+main ghar ja raha hun -> I am going home.
+mujhe nahi khaana -> I don't want to eat.
+naan veliya poren -> I am going outside.
+
+Text:
+{text}
+"""
+
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=prompt
+    )
+
+    if not response.text:
+        raise Exception("Empty response from Gemini.")
+
+    return response.text.strip()
+
+
+def _translate_with_google_fallback(
+    text: str,
+    source_lang: str,
+    target_lang: str
+) -> str:
+    # deep-translator uses "auto" for automatic language detection
+    source = "auto" if source_lang == "auto" else source_lang
+
+    translator = GoogleTranslator(
+        source=source,
+        target=target_lang
+    )
+
+    translated = translator.translate(text)
+
+    if not translated:
+        raise Exception("Google fallback returned empty response.")
+
+    return translated.strip()
+
+
 async def translate_text(
     text: str,
     target_lang: str,
     source_lang: str = "auto"
 ) -> dict:
-    # Detect source language first if auto
-    detected_lang = source_lang
+    if not text.strip():
+        return {
+            "translated_text": "",
+            "detected_language": "en",
+            "detected_language_name": "English",
+            "source_lang": source_lang,
+            "target_lang": target_lang,
+            "character_count": 0,
+        }
 
+    # Detect source language
+    detected_lang = source_lang
     if source_lang == "auto":
         try:
             detected_lang = await _detect_language_with_gemini(text)
         except Exception:
-            detected_lang = "en"
+            detected_lang = "auto"
 
-    # ---------------- Primary: Gemini ----------------
+    # PRIMARY: Gemini
     try:
         translated = await _translate_with_gemini(
             text=text,
-            source_lang=source_lang,
+            source_lang=detected_lang if source_lang == "auto" else source_lang,
             target_lang=target_lang
         )
         translation_engine = "gemini"
 
-    # ---------------- Fallback: MyMemory ----------------
-    except Exception as gemini_error:
+    # FALLBACK: Google Translate via deep-translator
+    except Exception:
         try:
-            translated = await _translate_with_mymemory(
-                text=text,
-                source_lang=detected_lang,
-                target_lang=target_lang
+            translated = await asyncio.to_thread(
+                _translate_with_google_fallback,
+                text,
+                "auto" if source_lang == "auto" else source_lang,
+                target_lang
             )
-            translation_engine = "mymemory"
+            translation_engine = "google-fallback"
         except Exception:
-            # If both fail, show Gemini error so user knows to retry later
             raise Exception(
-                f"Gemini is temporarily unavailable or quota exceeded. "
-                f"Please try again after some time.\n\n"
-                f"Original error: {str(gemini_error)}"
+                "Gemini quota exceeded and fallback translation is "
+                "temporarily unavailable. Please try again later."
             )
 
     return {
         "translated_text": translated,
-        "detected_language": detected_lang,
+        "detected_language": (
+            detected_lang if detected_lang != "auto" else "en"
+        ),
         "detected_language_name": LANGUAGE_NAMES.get(
-            detected_lang,
-            detected_lang
+            detected_lang if detected_lang != "auto" else "en",
+            "English"
         ),
         "source_lang": source_lang,
         "target_lang": target_lang,
@@ -214,9 +185,6 @@ async def translate_text(
     }
 
 
-# ---------------------------------------------------------
-# Public Language Detection Function
-# ---------------------------------------------------------
 async def detect_language(text: str) -> dict:
     try:
         code = await _detect_language_with_gemini(text)
