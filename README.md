@@ -1,61 +1,66 @@
-# 🌐 LinguaFlow — AI-Powered Real-Time Translator
+# 🌍 LinguaFlow — AI-Powered Real-Time Translator
 
-A production-grade full-stack translation web application powered by **Google Gemini AI** with an automatic **Google Translate fallback** to ensure accurate translations even when Gemini quota is exceeded.
+LinguaFlow is a production-grade AI translation web application built for the Pinnacle Labs Internship.
+
+It provides high-quality translations using Google's Gemini AI and automatically falls back to Google Translate when Gemini quota is exhausted.
 
 ---
 
 ## ✨ Features
 
-- 🧠 Gemini AI Translation (Primary)
-- 🔄 Automatic Google Translate Fallback
-- 🌍 30+ Languages Supported
-- 🔍 Auto Language Detection
-- 🎙️ Voice Input (Speech-to-Text)
-- 🔊 Text-to-Speech Output
-- ⚡ Real-Time Translation
-- 📋 Translation History
-- 📥 Download Translation
-- 📋 Copy to Clipboard
-- 🔁 Swap Languages
-- 🌙 Dark / Light Theme
-- 📱 Fully Responsive Premium UI
+- 🤖 AI-powered translation using Gemini 2.5 Flash Lite
+- 🔄 Automatic fallback to Google Translate
+- 🌐 Auto language detection
+- 🗣️ Voice input (Speech Recognition)
+- 🔊 Text-to-Speech output
+- 📋 Copy translated text
+- 📥 Download translation
+- 🌙 Dark and Light themes
+- ⚡ Real-time translation mode
+- 📱 Fully responsive design
+- 🇮🇳 Accurate Roman Hindi/Urdu translation support
 
 ---
 
-## 🧠 Translation Engine Priority
+## 🧠 Translation Architecture
 
-### 1. Google Gemini 2.5 Flash Lite
-Primary translation engine for:
-- Natural translations
-- Context-aware understanding
-- Hinglish, Tanglish, Roman Urdu support
+Input Text
+→ Auto Language Detection
+→ Gemini AI Translation (Primary)
+→ If quota exceeded or error
+→ Google Translate Fallback
+→ Final Accurate Translation
 
-### 2. Google Translate (deep-translator)
-Automatic fallback when:
-- Gemini quota is exceeded
-- Gemini is temporarily unavailable
+---
 
-This ensures:
-- Accurate translations
-- Automatic language detection
-- Reliable service with no poor word-by-word output
+## 🎯 Example Translations
+
+| Input | Output |
+|------|------|
+| main ghar ja raha hun | I am going home |
+| mujhe nahi khaana | I don't want to eat |
+| haan main galat | Yes, I am wrong |
+| aap kya kar rahe hain | What are you doing? |
+| मैं घर जा रहा हूँ | I am going home |
 
 ---
 
 ## 🛠️ Tech Stack
 
 ### Frontend
-- React 18
+- React.js
 - Vite
-- Modern CSS (Glassmorphism UI)
+- JavaScript
+- CSS3
 
 ### Backend
 - FastAPI
-- Python 3.11+
+- Python 3.11
 
-### Translation Engines
+### AI & Translation
 - Google Gemini API
-- deep-translator (Google Translate fallback)
+- deep-translator
+- langdetect
 
 ### Deployment
 - Vercel (Frontend)
@@ -63,10 +68,15 @@ This ensures:
 
 ---
 
-## 📁 Project Structure
+## 📂 Project Structure
 
-\`\`\`
-LinguaFlow/
+linguaflow/
+├── frontend/
+│   ├── src/
+│   ├── public/
+│   ├── package.json
+│   └── .env
+│
 ├── backend/
 │   ├── services/
 │   │   └── translation_service.py
@@ -76,174 +86,152 @@ LinguaFlow/
 │   ├── runtime.txt
 │   └── .env
 │
-├── frontend/
-│   ├── src/
-│   ├── package.json
-│   ├── vite.config.js
-│   └── .env
-│
 ├── .gitignore
 └── README.md
-\`\`\`
 
 ---
 
 ## ⚙️ Environment Variables
 
-### Backend (`backend/.env`)
+### Backend (.env)
 
-\`\`\`env
 GEMINI_API_KEY=your_actual_gemini_api_key
 MODEL_NAME=gemini-2.5-flash-lite
-\`\`\`
 
-### Frontend (`frontend/.env`)
+### Frontend (.env)
 
-\`\`\`env
 VITE_API_URL=https://your-render-backend-url.onrender.com/api
-\`\`\`
 
 ---
 
-## 🚀 Run Locally
+## 🚀 Local Installation
 
-### Backend
+### 1. Clone Repository
 
-\`\`\`bash
+git clone https://github.com/kmdathar07/LinguaFlow.git
+cd LinguaFlow
+
+### 2. Backend Setup
+
 cd backend
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
-python3 -m uvicorn main:app --reload --port 8000
-\`\`\`
+uvicorn main:app --reload
 
-Backend runs at:
-- http://127.0.0.1:8000
+### 3. Frontend Setup
 
-### Frontend
-
-\`\`\`bash
-cd frontend
+cd ../frontend
 npm install
 npm run dev
-\`\`\`
-
-Frontend runs at:
-- http://localhost:3000
 
 ---
 
-## ☁️ Deployment
+## 🌐 Deployment
 
-### Backend on Render
+### Backend Deployment (Render)
 
-**Root Directory**
-\`\`\`
-backend
-\`\`\`
-
-**Build Command**
-\`\`\`bash
+Build Command:
 pip install -r requirements.txt
-\`\`\`
 
-**Start Command**
-\`\`\`bash
+Start Command:
 uvicorn main:app --host 0.0.0.0 --port \$PORT
-\`\`\`
 
-**Environment Variables**
+Environment Variables:
 - GEMINI_API_KEY
 - MODEL_NAME=gemini-2.5-flash-lite
 
----
+### Frontend Deployment (Vercel)
 
-### Frontend on Vercel
-
-Set the following environment variable:
-
-\`\`\`env
-VITE_API_URL=https://your-render-backend-url.onrender.com/api
-\`\`\`
+Environment Variable:
+- VITE_API_URL=https://your-render-backend-url.onrender.com/api
 
 ---
 
-## 🌍 Supported Languages
+## 🔁 Translation Strategy
 
-English, Hindi, Tamil, Telugu, Malayalam, Urdu, Arabic, French, German, Spanish, Japanese, Korean, Chinese, Russian, Portuguese, and many more.
+### Primary Translator
+Gemini 2.5 Flash Lite
 
----
+### Fallback Translator
+Google Translate (deep-translator)
 
-## 🧪 Example Translations
-
-| Input | Output |
-|------|------|
-| main ghar ja raha hun | I am going home. |
-| mujhe nahi khaana | I don't want to eat. |
-| naan veliya poren | I am going outside. |
-| aap kya kar rahe ho | What are you doing? |
+### Language Detection
+- langdetect
+- Custom Roman Hindi heuristics
 
 ---
 
-## 📡 API Endpoints
+## 📸 Screenshots
 
-### POST /api/translate
+### Main Interface
+- Clean modern UI
+- Dual translation panels
+- Voice and audio controls
 
-**Request**
-\`\`\`json
-{
-  "text": "main ghar ja raha hun",
-  "source_lang": "auto",
-  "target_lang": "en"
-}
-\`\`\`
+### Real-Time Translation
+- Instant translation as you type
 
-**Response**
-\`\`\`json
-{
-  "translated_text": "I am going home.",
-  "detected_language": "hi",
-  "target_lang": "en",
-  "translation_engine": "gemini"
-}
-\`\`\`
+### Auto Language Detection
+- Detects both native and transliterated languages
 
 ---
 
-### POST /api/detect
+## 💼 Internship Highlights
 
-Detects the language of input text.
+This project demonstrates:
 
----
-
-## 🛡️ Error Handling
-
-If Gemini quota is exceeded:
-1. Automatically switches to Google Translate fallback.
-2. If fallback is also unavailable, a friendly error message is shown.
-
----
-
-## 📸 Highlights
-
-- Premium glassmorphism interface
-- Real-time translation panel
-- Voice input and text-to-speech
-- Translation history
-- Dark / Light mode
+- AI API integration
+- Fallback architecture
+- Error handling
+- Real-time UX
+- Speech recognition
+- Production deployment
+- Full-stack development
 
 ---
 
-## 📄 License
+## 📈 Performance Features
 
-MIT License
+- Fast translation responses
+- Automatic quota handling
+- Reliable fallback system
+- Responsive UI
+- Cross-browser compatibility
+
+---
+
+## 🔐 Security
+
+- API keys stored in environment variables
+- Sensitive files excluded via .gitignore
+- No secrets exposed in GitHub
 
 ---
 
 ## 👨‍💻 Author
 
-**Mohammed Athar K**
+Mohammed Athar K
 
 - GitHub: https://github.com/kmdathar07
 - Email: kmdathar07@gmail.com
 
 ---
-Built with ❤️ using React, FastAPI, and Google Gemini AI.
+
+## 🏢 Internship
+
+Developed as part of the Pinnacle Labs Internship Program.
+
+---
+
+## 📜 License
+
+This project is for educational and internship purposes.
+
+---
+
+## ⭐ Repository
+
+If you like this project, please star the repository.
+
+https://github.com/kmdathar07/LinguaFlow
